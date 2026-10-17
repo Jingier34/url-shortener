@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -44,6 +44,10 @@ def generate_code(conn, length=6):
         code = "".join(random.choices(chars, k=length))
         if not code_exists(conn, code):
             return code
+
+@app.get("/")
+def serve_frontend():
+    return FileResponse("index.html")
 
 @app.get("/health")
 def health_check():

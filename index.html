@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>URL Shortener</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+        h1 { color: #333; }
+        input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        button { background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background: #45a049; }
+        .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd; }
+        .result { margin-top: 10px; padding: 12px; background: #f4f4f4; border-radius: 5px; }
+        .error { color: #c0392b; }
+    </style>
+</head>
+<body>
+    <h1>URL Shortener</h1>
+
+    <div class="section">
+        <h3>1. Shorten a URL</h3>
+        <input type="text" id="urlInput" placeholder="https://example.com/very/long/link">
+        <input type="text" id="codeInput" placeholder="Custom code (optional)">
+        <button onclick="shorten()">Shorten</button>
+        <div id="shortenResult"></div>
+    </div>
+
+    <div class="section">
+        <h3>2. Check link stats</h3>
+        <input type="text" id="statsInput" placeholder="Short code, e.g. my-github">
+        <button onclick="getStats()">Get Stats</button>
+        <div id="statsResult"></div>
+    </div>
+
+    <script>
+        function showError(elementId, message) {
+            document.getElementById(elementId).innerHTML =
+                `<div class="result error">Error: ${message}</div>`;
+        }
+
+        async function shorten() {
+            const url = document.getElementById('urlInput').value.trim();
+            const customCode = document.getElementById('codeInput').value.trim();
+            if (!url) {
+                showError('shortenResult', 'Please enter a URL.');
+                return;
+            }
+            const body = { url };
+            if (customCode) body.custom_code = customCode;
+
+            const response = await fetch('/shorten', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                showError('shortenResult', data.detail);
+                return;
+            }
+            document.getElementById('shortenResult').innerHTML =
+                `<div class="result">Short URL: <a href="${data.short_url}" target="_blank">${data.short_url}</a></div>`;
+        }
+
+        async function getStats() {
+            const code = document.getElementById('statsInput').value.trim();
+            if (!code) {
+                showError('statsResult', 'Please enter a short code.');
+                return;
+            }
+            const response = await fetch(`/stats/${encodeURIComponent(code)}`);
+            const data = await response.json();
+            if (!response.ok) {
+                showError('statsResult', data.detail);
+                return;
+            }
+            document.getElementById('statsResult').innerHTML =
+                `<div class="result">
+                    Original URL: ${data.original_url}<br>
+                    Created: ${data.created_at}<br>
+                    Clicks: ${data.clicks}
+                </div>`;
+        }
+    </script>
+</body>
+</html>
