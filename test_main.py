@@ -6,6 +6,7 @@ import main
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    # 每个测试用一个临时的空数据库，不影响真实的 urls.db
     monkeypatch.setattr(main, "DB_PATH", str(tmp_path / "test.db"))
     main.init_db()
     return TestClient(main.app)
@@ -73,4 +74,23 @@ def test_custom_code_invalid_format(client):
 
 def test_custom_code_reserved(client):
     response = client.post("/shorten", json={"url": "https://www.github.com", "custom_code": "stats"})
+    assert response.status_code == 400
+
+
+def test_expiration_is_set(client):
+    response = client.post("/shorten", json={"url": "https://www.google.com", "expires_in_days": 7})
+    assert response.status_code == 200
+    assert response.json()["expires_at"] is not None
+
+
+def test_expired_link_returns_410(client):
+    code = client.post("/shorten", json={"url": "https://www.google.com", "expires_in_days": 1}).json()["short_code"]
+    with main.get_conn() as conn:
+        conn.execute("UPDATE urls SET expires_at = ? WHERE code = ?", ("2020-01-01T00:00:00", code))
+    response = client.get(f"/{code}", follow_redirects=False)
+    assert response.status_code == 410
+
+
+def test_invalid_expiration_days(client):
+    response = client.post("/shorten", json={"url": "https://www.google.com", "expires_in_days": 0})
     assert response.status_code == 400

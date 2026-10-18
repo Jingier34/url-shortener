@@ -2,7 +2,7 @@ import random
 import re
 import sqlite3
 import string
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -28,12 +28,17 @@ def init_db():
                 clicks INTEGER DEFAULT 0
             )
         """)
+        # 迁移：旧的数据库没有 expires_at 这一列，需要补上
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(urls)")]
+        if "expires_at" not in columns:
+            conn.execute("ALTER TABLE urls ADD COLUMN expires_at TEXT")
 
 init_db()
 
 class URLRequest(BaseModel):
     url: str
     custom_code: Optional[str] = None
+    expires_in_days: Optional[int] = None
 
 def code_exists(conn, code):
     return conn.execute("SELECT 1 FROM urls WHERE code = ?", (code,)).fetchone() is not None
@@ -58,6 +63,12 @@ def shorten_url(request: URLRequest):
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
 
+    expires_at = None
+    if request.expires_in_days is not None:
+        if not 1 <= request.expires_in_days <= 365:
+            raise HTTPException(status_code=400, detail="expires_in_days must be between 1 and 365")
+        expires_at = (datetime.now() + timedelta(days=request.expires_in_days)).isoformat()
+
     with get_conn() as conn:
         if request.custom_code:
             code = request.custom_code
@@ -74,17 +85,21 @@ def shorten_url(request: URLRequest):
             code = generate_code(conn)
 
         conn.execute(
-            "INSERT INTO urls (code, url, created_at) VALUES (?, ?, ?)",
-            (code, request.url, datetime.now().isoformat()),
+            "INSERT INTO urls (code, url, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (code, request.url, datetime.now().isoformat(), expires_at),
         )
 
-    return {"short_code": code, "short_url": f"http://127.0.0.1:8000/{code}"}
+    return {
+        "short_code": code,
+        "short_url": f"http://127.0.0.1:8000/{code}",
+        "expires_at": expires_at,
+    }
 
 @app.get("/stats/{code}")
 def get_stats(code: str):
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT code, url, created_at, clicks FROM urls WHERE code = ?", (code,)
+            "SELECT code, url, created_at, clicks, expires_at FROM urls WHERE code = ?", (code,)
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Short link not found")
@@ -93,13 +108,17 @@ def get_stats(code: str):
         "original_url": row[1],
         "created_at": row[2],
         "clicks": row[3],
+        "expires_at": row[4],
     }
 
 @app.get("/{code}")
 def redirect(code: str):
     with get_conn() as conn:
-        row = conn.execute("SELECT url FROM urls WHERE code = ?", (code,)).fetchone()
+        row = conn.execute("SELECT url, expires_at FROM urls WHERE code = ?", (code,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Short link not found")
+        url, expires_at = row
+        if expires_at and datetime.fromisoformat(expires_at) < datetime.now():
+            raise HTTPException(status_code=410, detail="This short link has expired")
         conn.execute("UPDATE urls SET clicks = clicks + 1 WHERE code = ?", (code,))
-    return RedirectResponse(row[0])
+    return RedirectResponse(url)
