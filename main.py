@@ -12,7 +12,7 @@ from pydantic import BaseModel
 app = FastAPI()
 
 DB_PATH = "urls.db"
-RESERVED_CODES = {"stats", "health", "docs", "redoc", "shorten"}
+RESERVED_CODES = {"stats", "health", "docs", "redoc", "shorten", "links"}
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,20}$")
 
 def get_conn():
@@ -95,6 +95,23 @@ def shorten_url(request: URLRequest):
         "expires_at": expires_at,
     }
 
+@app.get("/links")
+def list_links():
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT code, url, created_at, clicks, expires_at FROM urls ORDER BY clicks DESC"
+        ).fetchall()
+    return [
+        {
+            "short_code": row[0],
+            "original_url": row[1],
+            "created_at": row[2],
+            "clicks": row[3],
+            "expires_at": row[4],
+        }
+        for row in rows
+    ]
+
 @app.get("/stats/{code}")
 def get_stats(code: str):
     with get_conn() as conn:
@@ -122,3 +139,11 @@ def redirect(code: str):
             raise HTTPException(status_code=410, detail="This short link has expired")
         conn.execute("UPDATE urls SET clicks = clicks + 1 WHERE code = ?", (code,))
     return RedirectResponse(url)
+
+@app.delete("/{code}")
+def delete_link(code: str):
+    with get_conn() as conn:
+        if not code_exists(conn, code):
+            raise HTTPException(status_code=404, detail="Short link not found")
+        conn.execute("DELETE FROM urls WHERE code = ?", (code,))
+    return {"message": f"Short link '{code}' deleted"}

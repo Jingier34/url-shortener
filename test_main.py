@@ -94,3 +94,30 @@ def test_expired_link_returns_410(client):
 def test_invalid_expiration_days(client):
     response = client.post("/shorten", json={"url": "https://www.google.com", "expires_in_days": 0})
     assert response.status_code == 400
+
+def test_delete_link(client):
+    code = client.post("/shorten", json={"url": "https://www.google.com"}).json()["short_code"]
+    response = client.delete(f"/{code}")
+    assert response.status_code == 200
+    assert client.get(f"/{code}", follow_redirects=False).status_code == 404
+
+
+def test_delete_unknown_link(client):
+    response = client.delete("/abc123")
+    assert response.status_code == 404
+
+def test_list_links_sorted_by_clicks(client):
+    code_a = client.post("/shorten", json={"url": "https://www.google.com"}).json()["short_code"]
+    code_b = client.post("/shorten", json={"url": "https://www.github.com"}).json()["short_code"]
+    for _ in range(2):
+        client.get(f"/{code_b}", follow_redirects=False)
+    links = client.get("/links").json()
+    assert len(links) == 2
+    assert links[0]["short_code"] == code_b
+    assert links[1]["short_code"] == code_a
+
+
+def test_list_links_empty(client):
+    response = client.get("/links")
+    assert response.status_code == 200
+    assert response.json() == []
