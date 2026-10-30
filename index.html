@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>URL Shortener</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+        body { font-family: Arial, sans-serif; max-width: 700px; margin: 50px auto; padding: 20px; }
         h1 { color: #333; }
         input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
         button { background: #4CAF50; color: white; border: none; cursor: pointer; }
@@ -12,6 +12,11 @@
         .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd; }
         .result { margin-top: 10px; padding: 12px; background: #f4f4f4; border-radius: 5px; }
         .error { color: #c0392b; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+        th, td { padding: 8px; border-bottom: 1px solid #ddd; text-align: left; }
+        td.url { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .delete-btn { background: #c0392b; width: auto; padding: 5px 10px; margin: 0; }
+        .delete-btn:hover { background: #a93226; }
     </style>
 </head>
 <body>
@@ -21,6 +26,7 @@
         <h3>1. Shorten a URL</h3>
         <input type="text" id="urlInput" placeholder="https://example.com/very/long/link">
         <input type="text" id="codeInput" placeholder="Custom code (optional)">
+        <input type="number" id="daysInput" placeholder="Expires in days, 1-365 (optional)" min="1" max="365">
         <button onclick="shorten()">Shorten</button>
         <div id="shortenResult"></div>
     </div>
@@ -32,21 +38,32 @@
         <div id="statsResult"></div>
     </div>
 
+    <div class="section">
+        <h3>3. All links</h3>
+        <div id="linksTable"></div>
+    </div>
+
     <script>
         function showError(elementId, message) {
             document.getElementById(elementId).innerHTML =
                 `<div class="result error">Error: ${message}</div>`;
         }
 
+        function formatDate(isoString) {
+            return isoString ? new Date(isoString).toLocaleString() : "Never";
+        }
+
         async function shorten() {
             const url = document.getElementById('urlInput').value.trim();
             const customCode = document.getElementById('codeInput').value.trim();
+            const days = document.getElementById('daysInput').value.trim();
             if (!url) {
                 showError('shortenResult', 'Please enter a URL.');
                 return;
             }
             const body = { url };
             if (customCode) body.custom_code = customCode;
+            if (days) body.expires_in_days = parseInt(days, 10);
 
             const response = await fetch('/shorten', {
                 method: 'POST',
@@ -55,11 +72,16 @@
             });
             const data = await response.json();
             if (!response.ok) {
-                showError('shortenResult', data.detail);
+                const message = typeof data.detail === 'string' ? data.detail : 'Invalid input.';
+                showError('shortenResult', message);
                 return;
             }
             document.getElementById('shortenResult').innerHTML =
-                `<div class="result">Short URL: <a href="${data.short_url}" target="_blank">${data.short_url}</a></div>`;
+                `<div class="result">
+                    Short URL: <a href="${data.short_url}" target="_blank">${data.short_url}</a><br>
+                    Expires: ${formatDate(data.expires_at)}
+                </div>`;
+            loadLinks();
         }
 
         async function getStats() {
@@ -74,13 +96,50 @@
                 showError('statsResult', data.detail);
                 return;
             }
+            const expired = data.expires_at && new Date(data.expires_at) < new Date();
             document.getElementById('statsResult').innerHTML =
                 `<div class="result">
                     Original URL: ${data.original_url}<br>
-                    Created: ${data.created_at}<br>
-                    Clicks: ${data.clicks}
+                    Created: ${formatDate(data.created_at)}<br>
+                    Clicks: ${data.clicks}<br>
+                    Expires: ${formatDate(data.expires_at)}${expired ? ' <span class="error">(expired)</span>' : ''}
                 </div>`;
         }
+
+        async function loadLinks() {
+            const response = await fetch('/links');
+            const links = await response.json();
+            if (links.length === 0) {
+                document.getElementById('linksTable').innerHTML = '<p>No links yet.</p>';
+                return;
+            }
+            const rows = links.map(link => `
+                <tr>
+                    <td><a href="/${link.short_code}" target="_blank">${link.short_code}</a></td>
+                    <td class="url" title="${link.original_url}">${link.original_url}</td>
+                    <td>${link.clicks}</td>
+                    <td><button class="delete-btn" onclick="deleteLink('${link.short_code}')">Delete</button></td>
+                </tr>
+            `).join('');
+            document.getElementById('linksTable').innerHTML = `
+                <table>
+                    <tr><th>Code</th><th>Original URL</th><th>Clicks</th><th></th></tr>
+                    ${rows}
+                </table>
+            `;
+        }
+
+        async function deleteLink(code) {
+            if (!confirm(`Delete short link "${code}"?`)) return;
+            const response = await fetch(`/${encodeURIComponent(code)}`, { method: 'DELETE' });
+            if (!response.ok) {
+                const data = await response.json();
+                alert(`Error: ${data.detail}`);
+            }
+            loadLinks();
+        }
+
+        loadLinks();
     </script>
 </body>
 </html>
