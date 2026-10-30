@@ -9,6 +9,7 @@ def client(tmp_path, monkeypatch):
     # 每个测试用一个临时的空数据库，不影响真实的 urls.db
     monkeypatch.setattr(main, "DB_PATH", str(tmp_path / "test.db"))
     main.init_db()
+    main.request_log.clear()
     return TestClient(main.app)
 
 
@@ -85,6 +86,7 @@ def test_expiration_is_set(client):
 
 def test_expired_link_returns_410(client):
     code = client.post("/shorten", json={"url": "https://www.google.com", "expires_in_days": 1}).json()["short_code"]
+    # 直接把过期时间改成过去，模拟链接已经过期
     with main.get_conn() as conn:
         conn.execute("UPDATE urls SET expires_at = ? WHERE code = ?", ("2020-01-01T00:00:00", code))
     response = client.get(f"/{code}", follow_redirects=False)
@@ -94,6 +96,7 @@ def test_expired_link_returns_410(client):
 def test_invalid_expiration_days(client):
     response = client.post("/shorten", json={"url": "https://www.google.com", "expires_in_days": 0})
     assert response.status_code == 400
+
 
 def test_delete_link(client):
     code = client.post("/shorten", json={"url": "https://www.google.com"}).json()["short_code"]
@@ -105,6 +108,7 @@ def test_delete_link(client):
 def test_delete_unknown_link(client):
     response = client.delete("/abc123")
     assert response.status_code == 404
+
 
 def test_list_links_sorted_by_clicks(client):
     code_a = client.post("/shorten", json={"url": "https://www.google.com"}).json()["short_code"]
@@ -121,3 +125,11 @@ def test_list_links_empty(client):
     response = client.get("/links")
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_rate_limit(client):
+    for _ in range(main.RATE_LIMIT):
+        response = client.post("/shorten", json={"url": "https://www.google.com"})
+        assert response.status_code == 200
+    response = client.post("/shorten", json={"url": "https://www.google.com"})
+    assert response.status_code == 429

@@ -2,10 +2,12 @@ import random
 import re
 import sqlite3
 import string
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -14,6 +16,20 @@ app = FastAPI()
 DB_PATH = "urls.db"
 RESERVED_CODES = {"stats", "health", "docs", "redoc", "shorten", "links"}
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,20}$")
+
+RATE_LIMIT = 10          # 每个时间窗口内允许的最多请求数
+RATE_WINDOW = 60         # 时间窗口长度（秒）
+request_log = defaultdict(deque)  # IP -> 最近的请求时间戳
+
+def check_rate_limit(ip):
+    now = time.time()
+    timestamps = request_log[ip]
+    # 去掉窗口之外的旧记录
+    while timestamps and timestamps[0] <= now - RATE_WINDOW:
+        timestamps.popleft()
+    if len(timestamps) >= RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    timestamps.append(now)
 
 def get_conn():
     return sqlite3.connect(DB_PATH)
@@ -59,19 +75,21 @@ def health_check():
     return {"status": "ok"}
 
 @app.post("/shorten")
-def shorten_url(request: URLRequest):
-    if not request.url.startswith(("http://", "https://")):
+def shorten_url(body: URLRequest, request: Request):
+    check_rate_limit(request.client.host)
+
+    if not body.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
 
     expires_at = None
-    if request.expires_in_days is not None:
-        if not 1 <= request.expires_in_days <= 365:
+    if body.expires_in_days is not None:
+        if not 1 <= body.expires_in_days <= 365:
             raise HTTPException(status_code=400, detail="expires_in_days must be between 1 and 365")
-        expires_at = (datetime.now() + timedelta(days=request.expires_in_days)).isoformat()
+        expires_at = (datetime.now() + timedelta(days=body.expires_in_days)).isoformat()
 
     with get_conn() as conn:
-        if request.custom_code:
-            code = request.custom_code
+        if body.custom_code:
+            code = body.custom_code
             if not CODE_PATTERN.match(code):
                 raise HTTPException(
                     status_code=400,
@@ -86,7 +104,7 @@ def shorten_url(request: URLRequest):
 
         conn.execute(
             "INSERT INTO urls (code, url, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (code, request.url, datetime.now().isoformat(), expires_at),
+            (code, body.url, datetime.now().isoformat(), expires_at),
         )
 
     return {
